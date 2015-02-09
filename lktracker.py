@@ -72,7 +72,7 @@ class LKTracker(object):
         self.size[1] = np.size(self.image, 0)
         # search for good points
         self.features = cv2.goodFeaturesToTrack(self.prev_gray, **feature_params)
-
+        self.current_frame = 0
         # refine the corner locations
         cv2.cornerSubPix(self.prev_gray, self.features, **subpix_params)
         # self.cut_homography()
@@ -132,10 +132,11 @@ class LKTracker(object):
         for i in indexes:
             distances = []
             point0 = points[i][0]
-            left = indexes[i:i-5:-1]
-            right = indexes[i:10-len(left):1]
-
-            indexes2 = left + right
+            # left = indexes[i:i-5:-1]
+            # right = indexes[i:10-len(left):1]
+            #
+            # indexes2 = left + right
+            indexes2 = range(length)
             indexes2.remove(i)
             for j in indexes2:
                 point1 = points[j][0]
@@ -167,8 +168,8 @@ class LKTracker(object):
                 self.average += new_delta
                 # if i == 249:
                 #     print i, velocity, self.velocities[i], new_delta
-            if self.velocities[i][1] == 0:
-                self.velocities[i][1] = velocity
+            # if self.velocities[i][1] == 0:
+            self.velocities[i][1] = velocity
 
 
             acceleration = (2 * way) / (timing**2)
@@ -185,7 +186,7 @@ class LKTracker(object):
             # totals = sum(self.distances[i])
             # velocity = 2*totals / self.current_frame
             # acceleration = velocity / self.current_frame
-            self.averages[i] = velocity
+            # self.averages[i] = velocity
             self.averages[i] = self.velocities[i][0]
             # print velocity,acceleration
         self.average /= len(points)
@@ -248,7 +249,7 @@ class LKTracker(object):
             OpenCV's own drawing functions.
             Press ant key to close window."""
 
-        cv2.putText(self.image, str(round(self.average,2)), (100,100),
+        cv2.putText(self.image, str(self.current_frame) + "-" + str(round(self.average,2)), (100,100),
                     cv2.FONT_HERSHEY_SIMPLEX, 2, COLORS[0])
         for point, track, move, index in zip(self.features, self.tracks, self.distances, range(len(self.features))):
             # if index not in [249, 251, 252, 253, 268, 269, 270, 271, 485, 486, 487, 488, 0, 469, 470, 471, 472]:
