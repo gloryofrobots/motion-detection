@@ -13,6 +13,30 @@ subpix_params = dict(zeroZone=(-1, -1), winSize=(10, 10),
 
 feature_params = dict(maxCorners=500, qualityLevel=0.01, minDistance=10)
 
+COLORS = [
+    (0, 0, 0),
+    (255, 255, 255),
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (0, 255, 255),
+    (255, 0, 255),
+    (192, 192, 192),
+    (128, 128, 128),
+    (128, 0, 0),
+    (128, 128, 0),
+    (0, 128, 0),
+    (128, 0, 128),
+    (0, 128, 128),
+    (0, 0, 128),
+    ]
+
+def make_distance(point0, point1):
+    x1, y1 = point0
+    x2, y2 = point1
+    return math.sqrt((y1 - y2) ** 2 + (x1 - x2) ** 2)
+
 
 class LKTracker(object):
     """    Class for Lucas-Kanade tracking with
@@ -35,11 +59,13 @@ class LKTracker(object):
         self.size = [0, 0]
         self.status = []
         self.links = []
+        self.current_frame = 0
+
     def detect_points(self):
         """    Detect 'good features to track' (corners) in the current frame
             using sub-pixel accuracy. """
         # load the image and create grayscale
-        ret, self.image = self.cap.read()
+        self.read()
         self.prev_gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
 
         self.size[0] = np.size(self.image, 1)
@@ -79,7 +105,12 @@ class LKTracker(object):
 
         self.create_links(self.features)
         self.calculate_distances(self.features)
-        print self.distances
+        # print self.distances
+
+    def read(self):
+        self.current_frame += 1
+        ret, self.image = self.cap.read()
+        return ret
 
     def cut_homography(self):
         print "!!!!!!!!!!!!!!!!!"
@@ -92,30 +123,74 @@ class LKTracker(object):
 
     def create_links(self, points):
         length = len(points)
+        self.average = 0
+        self.averages = [i for i in range(length)]
+        self.velocities = [[0,0] for i in range(length)]
         indexes = [i for i in range(length)]
         self.links = [None for i in indexes]
 
         for i in indexes:
             distances = []
-            x1, y1 = points[i][0]
-            indexes2 = range(length)
+            point0 = points[i][0]
+            left = indexes[i:i-5:-1]
+            right = indexes[i:10-len(left):1]
+
+            indexes2 = left + right
             indexes2.remove(i)
             for j in indexes2:
-                x2, y2 = points[j][0]
-                distance = math.sqrt((y1 - y2) ** 2 + (x1 - x2) ** 2)
-                distances.append((distance,j))
-            distances = sorted(distances, key=lambda t:t[0])
-            self.links[i] = distances[0:3]
+                point1 = points[j][0]
+                distance = make_distance(point0, point1)
+                distances.append((distance, j))
+            distances = sorted(distances, key=lambda t: t[0])
+            self.links[i] = [link[1] for link in distances[0:12]]
+            # print i, self.links[i]
 
     def calculate_distances(self, points):
-        for i in range(len(points) - 1):
-            x1, y1 = points[i][0]
-            x2, y2 = points[i + 1][0]
-            distance = math.sqrt((y1 - y2) ** 2 + (x1 - x2) ** 2)
-            self.distances[i].append(distance)
+        self.average = 0
+        for i, point, link in zip(range(len(points)), points, self.links):
+            total = 0
+            move = self.distances[i]
+            for linked in link:
+                point1 = points[linked]
 
+                distance = make_distance(point[0], point1[0])
+                total += distance
+
+            move.append(total)
+            way = sum(move) / len(link)
+            timing = len(move)
+            velocity = way / timing
+            delta, last_velocity = self.velocities[i]
+            if last_velocity != 0:
+                new_delta = (abs(last_velocity - velocity) + delta) / 2
+                self.velocities[i][0] = new_delta
+                self.average += new_delta
+                # if i == 249:
+                #     print i, velocity, self.velocities[i], new_delta
+            if self.velocities[i][1] == 0:
+                self.velocities[i][1] = velocity
+
+
+            acceleration = (2 * way) / (timing**2)
+            # total = total/len(link)
+            #
+            # deltas = []
+            # for k in range(len(move) - 1):
+            #     first = move[k]
+            #     second = move[k + 1]
+            #     deltas.append(abs(first - second))
+            #
+            # totals = sum(deltas)
+            # print totals,self.current_frame, totals / self.current_frame, deltas
+            # totals = sum(self.distances[i])
+            # velocity = 2*totals / self.current_frame
+            # acceleration = velocity / self.current_frame
+            self.averages[i] = velocity
+            self.averages[i] = self.velocities[i][0]
+            # print velocity,acceleration
+        self.average /= len(points)
     def next_features(self):
-        ret, self.image = self.cap.read()
+        self.read()
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
 
         # reshape to fit input format
@@ -124,14 +199,14 @@ class LKTracker(object):
         # calculate optical flow
         self.features, status, track_error = cv2.calcOpticalFlowPyrLK(self.prev_gray, self.gray, previous, None,
                                                                       **lk_params)
-        return previous,status
+        return previous, status
 
     def track_points(self):
         # load the image and create grayscale
         # print self.current_features
         # remove points lost
         self.next_features()
-        self.calculate_distances()
+        self.calculate_distances(self.features)
         # self.features = [p for (st, p) in zip(status, self.current_features) if st]
 
         # # clean tracks from lost points
@@ -168,16 +243,18 @@ class LKTracker(object):
             self.dispatch()
 
     def draw(self):
-        self.counter-=1
+        self.counter -= 1
         """    Draw the current image with points using
             OpenCV's own drawing functions.
             Press ant key to close window."""
 
-
-        add_next = False
+        cv2.putText(self.image, str(round(self.average,2)), (100,100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2, COLORS[0])
         for point, track, move, index in zip(self.features, self.tracks, self.distances, range(len(self.features))):
-            if index not in [251,252,253,268,269,270,271,485,486,487,488,0, 469, 470, 471,472]:
-                continue
+            # if index not in [249, 251, 252, 253, 268, 269, 270, 271, 485, 486, 487, 488, 0, 469, 470, 471, 472]:
+            #     continue
+            # if index < 100 or index > 270:
+            #     continue
             if index == len(self.features) - 1:
                 continue
             if len(track) == 1:
@@ -187,26 +264,36 @@ class LKTracker(object):
                 cv2.circle(self.image, (int(point[0][0]), int(point[0][1])), 3, (0, 255, 0), -1)
                 continue
 
-            deltas = []
-            for i in range(len(move)-1):
-                first = move[i]
-                second = move[i+1]
-                deltas.append(abs(first-second))
-
-            total = sum(deltas)
-            average = total / len(deltas)
+            average = self.averages[index]
+            # print average
+            # print self.averages
+            # total = sum(move)
+            # average = total / self.current_frame
+            # average = total
+            # deltas = []
+            # for i in range(len(move) - 1):
+            #     first = move[i]
+            #     second = move[i + 1]
+            #     deltas.append(abs(first - second))
+            #
+            # total = sum(deltas)
+            #  average = total / len(deltas)
             average = abs(round(average, 2))
-            add_next = True
-            if add_next:
-                cv2.circle(self.image, (int(point[0][0]), int(point[0][1])), 3, (0, 255, 0), -1)
-                cv2.putText(self.image, str(index) + ":" + str(average), (int(point[0][0]), int(point[0][1])),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0))
-                add_next = False
+            # print index, average, self.average, self.averages[index]
+            check = average - self.average
+            if check > 0.02:
+                color = COLORS[0]
+            else:
+                color = COLORS[1]
+
+            cv2.circle(self.image, (int(point[0][0]), int(point[0][1])), 3, color, -1)
+            cv2.putText(self.image, str(index) + ":" + str(average), (int(point[0][0]), int(point[0][1])),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color)
 
             # if average > 0.5:
             #     cv2.circle(self.image, (int(point[0][0]), int(point[0][1])), 3, (0, 255, 0), -1)
             #     cv2.putText(self.image, str(index) + ":" + str(average), (int(point[0][0]), int(point[0][1])),
-            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0))
+            #                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0))
             #     add_next = True
 
             if self.trace_tracks:
