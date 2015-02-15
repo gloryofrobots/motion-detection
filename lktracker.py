@@ -96,58 +96,6 @@ MAGNITUDE_DELTA = 0.1
 POSITION_DELTA = 16
 
 
-class Block(object):
-    def __init__(self):
-        self.indexes = []
-
-        self.center_x = 0
-        self.center_y = 0
-        self.xs = []
-        self.ys = []
-        self.angles = []
-        self.magnitudes = []
-        self.center_angle = 0
-        self.center_magnitude = 0
-
-    def rect(self):
-        size = POSITION_DELTA / 2
-        return np.int32([self.center_x - size, self.center_y - size]), np.int32(
-            [self.center_x + size, self.center_y + size])
-
-    def set_point(self, index, x, y, angle, magnitude):
-        self.indexes.append(index)
-        self.angles.append(angle)
-        self.xs.append(x)
-        self.ys.append(y)
-        self.center_x = np.mean(self.xs)
-        self.center_y = np.mean(self.ys)
-        self.magnitudes.append(magnitude)
-        self.center_angle = np.mean(self.angles)
-        self.center_magnitude = np.mean(self.magnitudes)
-
-    def is_fit(self, x, y, angle, magnitude):
-        if abs(x - self.center_x) > POSITION_DELTA:
-            return False
-        if abs(y - self.center_y) > POSITION_DELTA:
-            return False
-        if abs(self.center_angle - angle) > ANGLE_DELTA:
-            return False
-        if abs(self.center_magnitude - magnitude) > MAGNITUDE_DELTA:
-            return False
-
-        return True
-
-    def __iter__(self):
-        return izip(self.indexes, self.angles, self.magnitudes)
-
-    def __repr__(self):
-        s = "angle = %f mag = %f points = [" % (self.center_angle, self.center_magnitude)
-        for i, a, m in self:
-            s += str((i, a, m))
-        s += "]"
-        return s
-
-
 def bounding_box(iterable):
     min_x = min(iterable, key=lambda x: x[0])[0]
     max_x = max(iterable, key=lambda x: x[0])[0]
@@ -164,7 +112,7 @@ class Block(object):
         else:
             self.color = COLORS[label]
 
-        if self.label == 54:
+        if self.label == 56:
             self.color = COLORS[0]
 
         self.indexes = indexes
@@ -177,63 +125,19 @@ class Block(object):
 
         self.top = 0
         self.distance = 0
+
         self.initial_points = points
-        self.init_bbox = bounding_box(self.initial_points)
+        self.start_position = bounding_box(self.initial_points)
+
         self.points = None
         self.bbox = None
         self.track = []
-        self.links = []
         self.distances = []
-        self.set_points(points)
+        self.update(points)
         self.weight = 0
         self.weight2 = 0
-        self.weights2 = []
-        self.weights = []
-        self.averages = []
-        self.initial_weight = 0
-        self.angles = []
-        self.dxdy = []
-    def get_shifts(self):
-        total_magintude = 0
-        total_angle = 0
-        total_dx = 0
-        total_dy = 0
-        for block in self.links:
-            total_magintude += make_magnitude(self.top[0], self.top[1], block.top[0], block.top[1])
-            # total_magintude += make_magnitude(self.top[0], self.top[1], self.init_bbox[0], self.init_bbox[1])
-            total_angle += make_angle(self.top[0], self.top[1], block.top[0], block.top[1])
-            total_dx += self.top[0] - block.top[0]
-            total_dy += self.top[1] - block.top[1]
-        total_magintude /= len(self.links)
-        total_angle /= len(self.links)
-        self.angles.append(total_angle)
-        self.dxdy.append(np.round([total_dx,total_dy]))
-        return total_magintude, total_angle
 
-    def calculate_distance(self):
-        mag, angle = self.get_shifts()
-        self.weights.append(mag)
-        try:
-            delta = (self.weights[len(self.weights) - 2] - mag)
-        except KeyError:
-            delta = 0
-        self.averages.append(delta)
-        self.weight = np.sum(self.averages)
-        # if self.label in [54, 1, 42, 83]:
-        #     # print self.label, self.indexes, self.initial_weight, self.init_bbox, self.top, np.round(
-        #     #     self.weights), np.round(self.averages)
-        #
-        #     print self.label, self.track, self.angles, self.dxdy
-        #     # print np.round(self.track)
-
-    def set_links(self, links):
-        self.links = links
-
-        mag, angle = self.get_shifts()
-        self.initial_weight = mag
-        self.initial_weight2 = angle
-
-    def set_points(self, points):
+    def update(self, points):
         self.points = points
         self.bbox = bounding_box(self.points)
         previous = self.top
@@ -242,6 +146,29 @@ class Block(object):
 
         if previous:
             self.distances.append(make_magnitude(previous[0], previous[1], self.top[0], self.top[1]))
+
+    def evaluate(self):
+        pass
+
+    def draw(self, image):
+        for point in self.points:
+            # if index == len(self.features) - 1:
+            # print "I FOUND", index, block.label, block.top, point
+            cv2.circle(image, (int(point[0]), int(point[1])), 3, self.color, -1)
+
+        v1, v2 = self.rect()
+        cv2.rectangle(image, (v1[0], v1[1]), (v2[0], v2[1]), self.color)
+
+        # for link in block.links:
+        # cv2.line(self.image, link.top, block.top, block.color)
+        # cv2.rectangle(self.image, (block.init_bbox[0], block.init_bbox[1]),
+        # (block.init_bbox[2], block.init_bbox[3]), block.color)
+        mark = "%s : %s %s" % (str(self.label), str(round(self.weight, 2)), str(round(self.weight2, 2)))
+        # mark = "%s : %s" % (str(label), str(block.delta_distance))
+        cv2.putText(image, mark, (v2[0], v2[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.color)
+        # for point in block.track:
+        # cv2.circle(self.image, (int(point[0]), int(point[1])), 3, block.color, -1)
+        pass
 
     def rect(self):
         x0, y0, x1, y1 = self.bbox
@@ -256,6 +183,63 @@ class Block(object):
             s += str((i, a, m))
         s += "]"
         return s
+
+
+class Anchor(Block):
+    def __init__(self, target, label, indexes, points, angles, magnitudes, angle, magnitude, x, y):
+        super(Anchor, self).__init__(label, indexes, points, angles, magnitudes, magnitude, angle, x, y)
+        self.target = target
+        self.links = [self.target]
+        self.initial_distance = make_magnitude(self.top[0], self.top[1], self.target.top[0], self.target.top[1])
+        self.initial_angle = make_angle(self.top[0], self.top[1], self.target.top[0], self.target.top[1])
+
+        self.delta_mags = [self.initial_angle]
+        self.delta_angles = [self.initial_distance]
+        self.angles = []
+        self.distances = []
+
+    def get_shifts(self):
+        magintude = 0
+        angle = 0
+        for block in self.links:
+            magintude += make_magnitude(self.top[0], self.top[1], block.top[0], block.top[1])
+            # total_magintude += make_magnitude(self.top[0], self.top[1], self.init_bbox[0], self.init_bbox[1])
+            angle += make_angle(self.top[0], self.top[1], block.top[0], block.top[1])
+
+        magintude /= len(self.links)
+        angle /= len(self.links)
+        self.angles.append(angle)
+        self.distances.append(magintude)
+        return magintude, angle
+
+    def evaluate(self):
+        mag, angle = self.get_shifts()
+        try:
+            # delta = (self.weights[len(self.weights) - 2] - mag)
+            delta_mag = (self.initial_distance - mag)
+            delta_angle = (self.initial_angle - angle)
+        except KeyError:
+            delta_mag = 0
+            delta_angle = 0
+
+
+        self.delta_mags.append(delta_mag)
+        self.delta_angles.append(delta_angle)
+
+        self.target.weight = np.max(self.delta_mags)
+        self.target.weight2 = np.max(self.delta_angles)
+        self.target.weight = np.max(self.distances) / self.initial_distance
+        self.target.weight2 = np.max(self.angles) / self.initial_angle
+        # if self.label in [54, 1, 42, 83]:
+        # # print self.label, self.indexes, self.initial_weight, self.init_bbox, self.top, np.round(
+        # #     self.weights), np.round(self.averages)
+        #
+        #     print self.label, self.track, self.angles, self.dxdy
+        #     # print np.round(self.track)
+
+    def draw(self, image):
+        cv2.circle(image, (int(self.top[0]), int(self.top[1])), 5, COLORS[0], thickness=2)
+        cv2.line(image, (int(self.top[0]), int(self.top[1])), self.target.top, self.target.color)
 
 
 class LKTracker(object):
@@ -278,7 +262,6 @@ class LKTracker(object):
         self.size = [0, 0]
         self.current_frame = 0
 
-        self.anchor = None
         # self.video_writer = None
         self.indexes = []
         self.features = []
@@ -286,22 +269,9 @@ class LKTracker(object):
         self.tracks = []
         self.status = []
         self.blocks = []
-        self.point_to_block = dict()
-        self.step_mode = False
-        self.step_size = 20
-
-    def create_anchor(self):
-        self.size = (np.size(self.image, 1), np.size(self.image, 0))
-        side = 40
-        x0 = self.size[0] / 2
-        y0 = self.size[1] / 2
-        # x0 = self.size[0] - 100
-        # y0 = 100
-        x1 = x0 + side
-        y1 = y0 + side
-        self.initial_anchor = [x0, y0, x1, y1]
-        self.anchor = self.initial_anchor
-        self.anchor_data = self.gray0[y0:y1, x0:x1]
+        self.last_block = 0
+        self.step_mode = True
+        self.step_size = 100
 
     def detect_corners(self):
         # self.read()
@@ -314,26 +284,45 @@ class LKTracker(object):
 
         # load the image and create grayscale
         self.gray0 = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-        self.create_anchor()
 
         # search for good points
         self.features = cv2.goodFeaturesToTrack(self.gray0, **feature_params)
         # self.features = self.features.reshape(-1,  2)
-        anch = np.array([[[self.anchor[0], self.anchor[1]]]])
-        # anch.reshape(-1, 1, 2)
-        # print self.features
-        self.features = np.append(self.features, anch, axis=0)
         # refine the corner locations
         # cv2.cornerSubPix(self.gray0, self.features, **subpix_params)
+
+        self.indexes = [i for i in range(len(self.features))]
+        self.indexes = np.array(self.indexes)
+        self.tracks = [[p[0]] for p in self.features]
+        self.status = np.ones((len(self.features), 1))
+        self.initial_features = self.features.copy()
+        EMPTY_LABEL = -1
+
+    def create_block_links(self):
+        anchors = []
+        index = len(self.blocks)
+        point_index = len(self.features)
+        labels = self.labels.tolist()
+        for block in self.blocks:
+            points = [[block.top[0] - 20, block.top[1] + 20]]
+            self.features = np.append(self.features, np.array([points]), axis=0)
+            anchor = Anchor(block, index, [point_index], points, [0], [0],
+                            0, 0, 0, 0)
+            anchors.append(anchor)
+            labels.append(index)
+            index += 1
+            point_index += 1
+
+        self.blocks += anchors
+        self.labels = np.array(labels)
         self.indexes = [i for i in range(len(self.features))]
         self.indexes = np.array(self.indexes)
         self.tracks = [[p[0]] for p in self.features]
         self.status = np.ones((len(self.features), 1))
         self.initial_features = self.features.copy()
 
-        EMPTY_LABEL = -1
-
     def create_blocks(self):
+
         self.blocks = []
         self.detect_corners()
         points0, points1 = self.next_features()
@@ -370,6 +359,7 @@ class LKTracker(object):
         # if block in block.links:
         # block.links.remove(block)
 
+        self.last_block_point = len(self.features)
         self.labels = labels
         self.create_block_links()
         # for index, block in enumerate(self.blocks):
@@ -378,48 +368,13 @@ class LKTracker(object):
         # for index, data in self.point_to_block.items():
         # print index, data
 
-    def create_block_links(self):
-        static_index = len(self.features) - 1
-
-        for block in self.blocks:
-            if static_index in block.indexes:
-                static = block
-                print "STATIC INDEX", block.label
-
-        for i, block in enumerate(self.blocks):
-            block.set_links([static])
-        static.set_links([self.blocks[47]])
-
-    def create_block_links2(self):
-        # static_index = len(self.features) - 1
-        #
-        # for block in self.blocks:
-        #     if static_index in block.indexes:
-        #         static = block
-        #         print "STATIC INDEX", block.label
-
-        for i, block in enumerate(self.blocks):
-            # block.set_links([static])
-            distances = []
-            indexes2 = range(len(self.blocks))
-            indexes2.remove(i)
-
-            for j in indexes2:
-                block2 = self.blocks[j]
-                distance = make_magnitude(block.top[0], block.top[1], block2.top[0], block2.top[1])
-                distances.append((distance, j, block2))
-                distances = sorted(distances, key=lambda t: t[0])
-                block.set_links([link[2] for link in distances[0:8]])
-
-        # static.set_links([self.blocks[47]])
-
     def update_blocks(self, points):
         # print "POINTS", len(points)
         for index, block in enumerate(self.blocks):
             try:
                 block_points = points[self.labels.ravel() == index]
-                block.set_points(block_points)
-                block.calculate_distance()
+                block.update(block_points)
+                block.evaluate()
             except Exception as e:
                 print self.labels
                 print len(self.blocks)
@@ -459,8 +414,8 @@ class LKTracker(object):
         # self.features2 = cv2.perspectiveTransform(self.features, H)
         # # print self.features[0][0]
         # for p1,p2 in zip(self.features, self.features2):
-        #     cv2.circle(self.image, (p2[0][0], p2[0][1]), 1, COLORS[0])
-        #     cv2.circle(self.image, (p1[0][0], p1[0][1]), 1, COLORS[1])
+        # cv2.circle(self.image, (p2[0][0], p2[0][1]), 1, COLORS[0])
+        # cv2.circle(self.image, (p1[0][0], p1[0][1]), 1, COLORS[1])
         #     # print p1,p2
         # self.image = cv2.warpPerspective(self.gray1, H, (w, h))
         # self.image = cv2.addWeighted(self.image, 0.5, self.gray0, 0.5, 0)
@@ -546,31 +501,12 @@ class LKTracker(object):
         cv2.putText(self.image, str(self.current_frame) + "-" + str(round(len(self.blocks), 2)), (100, 100),
                     cv2.FONT_HERSHEY_SIMPLEX, 2, COLORS[0])
 
-        cv2.rectangle(self.image, (self.anchor[0], self.anchor[1]), (self.anchor[2], self.anchor[3]), COLORS[0])
         # cv2.rectangle(self.image, (self.initial_anchor[0], self.initial_anchor[1]), (self.initial_anchor[2], self.initial_anchor[3]), COLORS[0])
         # cv2.imshow("Anchor", self.anchor_data)
-        for label, block in enumerate(self.blocks):
+        for block in self.blocks:
             # if label not in [54, 79]:
             # continue
-
-            for index, angle, mag in block:
-                point = self.features[index]
-                # if index == len(self.features) - 1:
-                # print "I FOUND", index, block.label, block.top, point
-                cv2.circle(self.image, (int(point[0][0]), int(point[0][1])), 3, block.color, -1)
-
-            v1, v2 = block.rect()
-            cv2.rectangle(self.image, (v1[0], v1[1]), (v2[0], v2[1]), block.color)
-
-            for link in block.links:
-                cv2.line(self.image, link.top, block.top, block.color)
-            # cv2.rectangle(self.image, (block.init_bbox[0], block.init_bbox[1]),
-            # (block.init_bbox[2], block.init_bbox[3]), block.color)
-            mark = "%s : %s %s" % (str(label), str(round(block.weight, 2)), str(len(block.links)))
-            # mark = "%s : %s" % (str(label), str(block.delta_distance))
-            cv2.putText(self.image, mark, (v2[0], v2[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, block.color)
-            # for point in block.track:
-            #     cv2.circle(self.image, (int(point[0]), int(point[1])), 3, block.color, -1)
+            block.draw(self.image)
 
         cv2.imshow('LKtrack', self.image)
         # self.video_writer.write(self.image)
