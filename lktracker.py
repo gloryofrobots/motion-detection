@@ -8,8 +8,19 @@ import random
 from sklearn.cluster import MeanShift, estimate_bandwidth
 from sklearn.datasets.samples_generator import make_blobs
 from sklearn.cluster import DBSCAN
+from reader import Reader, identity_homography
+
 CLUSTER_FRAME = 10
-STEP_SIZE = 12
+STEP_SIZE = 112
+
+
+def totuple(a):
+    try:
+        return tuple(totuple(i) for i in a)
+    except TypeError:
+        return a
+
+
 def getComponents(normalised_homography):
     '''((translationx, translationy), rotation, (scalex, scaley), shear)'''
     a = normalised_homography[0, 0]
@@ -91,6 +102,17 @@ def make_angle(x1, y1, x2, y2):
 def make_magnitude(x1, y1, x2, y2):
     return math.sqrt((y1 - y2) ** 2 + (x1 - x2) ** 2)
 
+
+def make_delta(v1, v2):
+    val = abs(v1 - v2)
+    return val
+
+
+def make_delta2(v1, v2):
+    val = v1 - v2
+    return val
+
+
 def flow_motions(flow):
     """
     h, w = img.shape[:2]
@@ -127,7 +149,7 @@ def flow_motions(flow):
     av = np.average(fv, axis=0)
     # aa = np.average(fa, axis=0)
 
-    return val, av[0], #aa[0],
+    return val, av[0],  # aa[0],
 
 
 def draw_hsv(flow):
@@ -141,6 +163,7 @@ def draw_hsv(flow):
     hsv[..., 2] = 255
     bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     return bgr
+
 
 def neighbours_less_than(point, distance, data, delta):
     height, width = data.shape
@@ -164,33 +187,34 @@ def neighbours_less_than(point, distance, data, delta):
     if max_y > border_y:
         row_bottom = False
         max_y = border_y
-    indexes_x = np.arange(min_x, max_x+1)
-    indexes_y = np.arange(min_y, max_y+1)
+    indexes_x = np.arange(min_x, max_x + 1)
+    indexes_y = np.arange(min_y, max_y + 1)
 
     if col_left:
-        segment = data[min_y:max_y+1, min_x]
+        segment = data[min_y:max_y + 1, min_x]
         condition = segment < delta
         needle = indexes_y[condition]
         if len(needle):
             return np.array([min_x, needle[0]])
     if row_top:
-        segment = data[min_y, min_x:max_x+1]
+        segment = data[min_y, min_x:max_x + 1]
         condition = segment < delta
         needle = indexes_x[condition]
         if len(needle):
             return np.array([needle[0], min_y])
     if col_right:
-        segment = data[min_y:max_y+1, max_x]
+        segment = data[min_y:max_y + 1, max_x]
         condition = segment < delta
         needle = indexes_y[condition]
         if len(needle):
             return np.array([max_x, needle[0]])
     if row_bottom:
-        segment = data[max_y, min_x:max_x+1]
+        segment = data[max_y, min_x:max_x + 1]
         condition = segment < delta
         needle = indexes_x[condition]
         if len(needle):
             return np.array([needle[0], max_y])
+
 
 ANGLE_DELTA = 0.1
 MAGNITUDE_DELTA = 0.1
@@ -206,27 +230,66 @@ def bounding_box(iterable):
 
 
 class Block(object):
-    def __init__(self, label, indexes, points, centroid):
+    def __init__(self, label, indexes, centroid):
         self.label = label
         if label >= len(COLORS):
             self.color = random_color()
         else:
             self.color = COLORS[label]
         self.centroid = centroid
+        self.homography = identity_homography()
         self.indexes = indexes
         # print points
         self.top = 0
         self.points = None
         self.bbox = None
-        self.update(points)
+        self.boxes = []
+        self.rects = []
+        self.track = []
+        # self.update(points, self.homography)
 
-    def update(self, points):
-        self.points = points
+    def init(self, points):
+        try:
+            self.track.append(points)
+            self.bbox = bounding_box(points)
+            self.boxes.append(self.bbox)
+            self.top = (self.bbox[0], self.bbox[1])
+            rect = self.rect_points()
+            self.rectp = rect.reshape(-1, 1, 2)
+        except Exception as e:
+            raise e
+
+    def update(self, points, homography):
+        self.homography = homography
+        self.points = points[self.indexes]
+        self.track.append(self.points)
         self.bbox = bounding_box(self.points)
+        self.boxes.append(self.bbox)
         self.top = (self.bbox[0], self.bbox[1])
+        # if len(self.points) > 4:
+        #     points0 = self.track[-2].reshape(-1, 1, 2)
+        #     points1 = self.track[-1].reshape(-1, 1, 2)
+        #     self.homography, status_homo = cv2.findHomography(points0, points1, cv2.RANSAC, 1)
+
+        rect = cv2.perspectiveTransform(self.rectp, self.homography)
+        self.rects.append(rect.reshape(-1, 2))
+        self.rectp = rect
+
+    def rect(self, index=-1):
+        x0, y0, x1, y1 = self.boxes[index]
+        return (x0, y0), (x1, y1)
+
+    def morphed_rect(self, index=-1):
+        rect = self.rects[index]
+        return (rect[0][0], rect[0][1]), (rect[2][0], rect[2][1])
+
+    def rect_points(self, index=-1):
+        x0, y0, x1, y1 = self.boxes[index]
+        return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
 
     def evaluate(self):
         pass
+
 
     def draw(self, image):
         for point in self.points:
@@ -234,15 +297,21 @@ class Block(object):
             # print "I FOUND", index, block.label, block.top, point
             cv2.circle(image, (int(point[0]), int(point[1])), 3, self.color, -1)
 
+        points = totuple(self.rects[-1])
+        cv2.line(image, points[0], points[1], self.color)
+        cv2.line(image, points[1], points[2], self.color)
+        cv2.line(image, points[2], points[3], self.color)
+        cv2.line(image, points[3], points[0], self.color)
+
         v1, v2 = self.rect()
-        cv2.rectangle(image, (v1[0], v1[1]), (v2[0], v2[1]), self.color)
+        # cv2.rectangle(image, (v1[0], v1[1]), (v2[0], v2[1]), self.color)
 
         mark = "%s" % str(np.round(self.centroid, 2))
         cv2.putText(image, mark, (v1[0], v1[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.color)
 
-    def rect(self):
-        x0, y0, x1, y1 = self.bbox
-        return (x0, y0), (x1, y1)
+        # v1, v2 = self.morphed_rect()
+        # cv2.rectangle(image, (v1[0], v1[1]), (v2[0], v2[1]), self.color)
+
 
     def __iter__(self):
         return izip(self.indexes, self.points)
@@ -254,101 +323,85 @@ class Block(object):
         s += "]"
         return s
 
+
 class Detector(object):
     def __init__(self):
         self.points = []
-        self.median = None
         self.tracks = []
         self.frames_left = 0
         self.blocks = []
-        self.legend = np.zeros((1000,700,3), np.uint8)
-        self.legend[:,:] = 255
-    def init(self, features, motions, threshold):
+        self.legend = np.zeros((1000, 700, 3), np.uint8)
+
+    def clear_legend(self):
+        self.legend[:, :] = 255
+
+    def init(self, features):
         self.frames_left = CLUSTER_FRAME
-        self.median = len(features)
-        self.indexes = np.arange(self.median)
-        self.delta_angles = [[] for i in range(self.median)]
-        self.delta_mags = [[] for i in range(self.median)]
-        self.weights = [[] for i in range(self.median)]
-        self.weights2 = [[] for i in range(self.median)]
-        self.results = np.zeros(self.median, dtype=np.float32)
-        anchor_points = self.create_anchors(features, motions, 0.1)
-        # for a,p in izip(anchor_points, features):
-        #     print a
-        #     print p
-        # anchor_points = np.array([[p[0] - 20, p[1]+20] for p in features])
-        points = np.append(features, anchor_points, axis=0)
-        self.tracks = [points]
-        self.etalons = self.measure(points)
-        return points
+        self.points = features
+        self.tracks.append(features)
+        self.length = len(features)
+        self.indexes = np.arange(self.length)
+        # self.deltas1 = [[] for i in range(self.median)]
+        # self.deltas2 = [[] for i in range(self.median)]
+        # self.weights = [[] for i in range(self.median)]
+        # self.weights2 = [[] for i in range(self.median)]
+        # self.results = np.zeros(self.median, dtype=np.float32)
+        # self.measures = np.zeros(self.median, dtype=np.float32)
+        self.create_blocks(features)
+        return features
 
-    def create_anchors(self, features, motions, threshold):
-        anchors = np.zeros_like(features, dtype=np.int32)
-        sizes = range(30, 100)
-        bad = np.array([-1,-1])
-        # unique_sizes = []
-        for i, point in enumerate(features):
-            for size in sizes:
-                anchor = neighbours_less_than(point, size, motions, threshold)
-                if anchor is not None:
-                    # unique_sizes.append(size)
-                    anchors[i] = anchor
-                    break
-            else:
-                anchors[i] = bad
+    def create_blocks(self, features):
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        ret, label, centers = cv2.kmeans(features, 24, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        for i, center in enumerate(centers):
+            query = label.ravel() == i
+            indexes = self.indexes[query]
+            # points = features[query]
+            block = Block(i, indexes, center)
+            block.init(features[indexes])
+            self.blocks.append(block)
 
-        return anchors
-
-    def split(self, points):
-        targets = points[0:self.median]
-        anchors = points[self.median:]
-        return targets, anchors
-
-    def measure(self, points):
-        targets, anchors = self.split(points)
-
-        def calculate(vec):
-            return np.array([make_magnitude(*vec), make_angle(*vec)] )
-
-        vectors = np.concatenate((targets, anchors), axis=1)
-        values = np.apply_along_axis(calculate, 1, vectors)
-        return values
-
-    def update(self, points):
-        self.update_blocks(points)
+    def update(self, points, homography):
+        self.homography = homography
         self.tracks.append(points)
-        values = self.measure(points)
-        for i in range(self.median):
-            etalon = self.etalons[i]
-            current = values[i]
-            delta_mags = self.delta_mags[i]
-            delta_angles = self.delta_angles[i]
-            weights = self.weights[i]
-            weights2 = self.weights2[i]
-            delta_mags.append(current[0] / etalon[0])
-            delta_angles.append(current[1] / etalon[1])
-
-            weights.append(np.average(delta_mags))
-            weights2.append(np.average(delta_angles))
-            self.results[i] = abs(1-weights[-1]) + abs(1-weights2[-1])
-
-        self.frames_left -= 1
-        if self.frames_left <= 0:
-            self.clusterize()
-            self.frames_left = CLUSTER_FRAME
-
-    def update_blocks(self, points):
-        # print "POINTS", len(points)
         for block in self.blocks:
-            try:
-                block_points = points[block.indexes]
-                block.update(block_points)
-            except Exception as e:
-                print self.labels
-                print len(self.blocks)
-                print points
-                print block
-                raise e
+            block.update(points, homography)
+            # self.update_blocks(points)
+            # targets, anchors = self.split(points)
+            # values = self.measure(points)
+            # for i in range(self.median):
+            # etalon = self.etalons[i]
+            # current = values[i]
+            # deltas1 = self.deltas1[i]
+            #     deltas2 = self.deltas2[i]
+            #     weights = self.weights[i]
+            #     weights2 = self.weights2[i]
+            #     # deltas1.append(abs(current[0] - etalon[0]))
+            #     # deltas2.append(abs(current[1] - etalon[1]))
+            #     deltas1.append(current[0])
+            #     deltas2.append(current[1])
+            #     measure = self.measures[i]
+            #     weight = abs(1 - ((deltas1[-1] + deltas2[-1]) / measure))
+            #
+            #     weights.append(weight)
+            #     # weights2.append(np.average(deltas2))
+            #     self.results[i] = np.average(weights)
+            #     # self.results[i] = abs(1-weights[-1]) + abs(1-weights2[-1])
+            #     if i in [263, 13]:
+            #         print "**********************************"
+            #         print i
+            #         print measure
+            #         print targets[i]
+            #         print anchors[i]
+            #         print self.results[i]
+            #         print current
+            #         print deltas1
+            #         print deltas2
+            #         print weights
+            # self.frames_left -= 1
+            # if self.frames_left <= 0:
+            #     self.clusterize()
+            #     self.frames_left = CLUSTER_FRAME
 
     def meanshift(self, data, quantile):
         bandwidth = estimate_bandwidth(data, quantile=quantile)
@@ -356,12 +409,11 @@ class Detector(object):
         ms.fit(data)
         return ms
 
-
-    def clusterize_by_weight(self, data,  delta):
+    def clusterize_by_weight(self, data, delta):
         EMPTY_LABEL = -1
         centers = []
         center_values = []
-        labels = np.random.randint(EMPTY_LABEL, EMPTY_LABEL+1, len(data))
+        labels = np.random.randint(EMPTY_LABEL, EMPTY_LABEL + 1, len(data))
         for i, item in enumerate(data):
             criteria = item
             for mark, center in enumerate(centers):
@@ -375,7 +427,7 @@ class Detector(object):
                 centers.append(criteria)
                 center_values.append([criteria])
                 labels[i] = len(centers) - 1
-        return centers,labels
+        return centers, labels
 
 
     def clusterize_by_position(self, data, delta):
@@ -398,7 +450,7 @@ class Detector(object):
         # data = np.concatenate((block_points, weights.reshape(-1,1)), axis=1)
         # data = block_points
 
-        centers, labels = self.clusterize_by_weight(weights, 0.02)
+        centers, labels = self.clusterize_by_weight(weights, 0.01)
         # centers, labels = self.clusterize_by_position(block_points, 0.01)
         for i, centroid in enumerate(centers):
             # print labels.ravel() == i
@@ -412,15 +464,16 @@ class Detector(object):
         self.labels = labels
 
     def draw_legend(self):
+        self.clear_legend()
         y = 0
-        for i,block in enumerate(self.blocks):
+        for i, block in enumerate(self.blocks):
             x = 10
             y += 20
             cv2.circle(self.legend, (x, y), 5, block.color, thickness=2)
             x += 20
             mark = "block %d  points : %d centroid: %s" % (i, len(block.points), str(np.round(block.centroid, 2)))
             # mark = "%s : %s" % (str(label), str(block.delta_distance))
-            cv2.putText(self.legend, mark, (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLORS[0])
+            cv2.putText(self.legend, mark, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLORS[0])
         cv2.imshow("Legend", self.legend)
         pass
 
@@ -428,27 +481,54 @@ class Detector(object):
         for block in self.blocks:
             block.draw(image)
 
+    def draw_grid(self, image):
+        dist = 50
+        height, width = image.shape[:2]
+        zeros = np.zeros_like(image)
+        zeros[:, :] = 50
+        for i in range(0, height, dist):
+            cv2.line(zeros, (0, i), (width, i), COLORS[2])
+
+        for i in range(0, width, dist):
+            cv2.line(zeros, (i, 0), (i, height), COLORS[2])
+
+        zeros = cv2.warpPerspective(zeros, self.homography, (width, height))
+        overlay = cv2.addWeighted(image, 0.5, zeros, 0.5, 0)
+        cv2.imshow("overlay", overlay)
+
+    #
+    # for(int i=0;i<width;i+=dist)
+    # for(int j=0;j<height;j+=dist)
+    # mat.at<cv::Vec3b>(i,j)=cv::Scalar(10,10,10);
     def draw_points(self, image):
         index = len(self.tracks) - 1
         if index < 1:
             return
 
-        targets, anchors = self.split(self.tracks[index])
+        targets = self.tracks[index]
+        targets0 = self.tracks[0]
+        for i, p0 in izip(range(self.median), targets):
+            # if i not in [263, 13]:
+            # continue
+            t0 = targets0[i]
 
-        for i, p0, p1 in izip(range(self.median), targets, anchors):
-            w = self.weights[i][-1]
-            w2 = self.weights2[i][-1]
+            # w = self.weights[i][-1]
+            # w = self.results[i]
+            # w2 = self.weights2[i][-1]
             cv2.circle(image, (int(p0[0]), int(p0[1])), 5, COLORS[0], thickness=1)
-            cv2.circle(image, (int(p1[0]), int(p1[1])), 5, COLORS[1], thickness=1)
-            cv2.line(image, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), COLORS[0])
-            mark = "%s : %s %s" % (str(i), str(round(w, 2)), str(round(w2, 2)))
+            cv2.line(image, (int(t0[0]), int(t0[1])), (int(p0[0]), int(p0[1])), COLORS[1])
+            # mark = "%s : %s" % (str(i), str(round(w, 2)))
+            mark = ""
+            # mark = "%s " % (str(i))
             # mark = "%s : %s" % (str(label), str(block.delta_distance))
-            cv2.putText(image, mark, (int(p0[0]), int(p0[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLORS[0])
+            cv2.putText(image, mark, (int(p0[0]), int(p0[1])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[0])
 
     def draw(self, image):
-        self.draw_legend()
+        # self.draw_legend()
         self.draw_blocks(image)
         # self.draw_points(image)
+        # self.draw_grid(image)
+
 
 class LKTracker(object):
     """    Class for Lucas-Kanade tracking with
@@ -481,7 +561,6 @@ class LKTracker(object):
         self.distances = []
         self.weights = []
 
-
         self.cluster_frame = 0
 
         self.anchor_points = []
@@ -490,10 +569,9 @@ class LKTracker(object):
         self.last_block = 0
         self.step_mode = True
         self.step_size = STEP_SIZE
-
+        self.reader = Reader(self.cap, (0.8, 0.8))
 
     def init_tracking(self):
-        # self.read()
         self.current_frame = 0
         self.image = self.read()
         # fourcc = cv2.cv.CV_FOURCC('X', '2', '6', '4')
@@ -508,15 +586,15 @@ class LKTracker(object):
         self.features = cv2.goodFeaturesToTrack(self.gray0, **feature_params)
         # self.features = self.features.reshape(-1,  2)
         # refine the corner locations
-        # cv2.cornerSubPix(self.gray0, self.features, **subpix_params)
+        cv2.cornerSubPix(self.gray0, self.features, **subpix_params)
         self.features = np.float32(self.features).reshape(-1, 2)
         self.detector = Detector()
         self.image = self.read()
         self.gray1 = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
 
-        flow = cv2.calcOpticalFlowFarneback(self.gray0, self.gray1, 0.5, 3, 1, 3, 7, 1.5, 0)
-        motions,avg1 = flow_motions(flow)
-        self.features = self.detector.init(self.features, motions, avg1)
+        # flow = cv2.calcOpticalFlowFarneback(self.gray0, self.gray1, 0.5, 3, 1, 3, 7, 1.5, 0)
+        # motions, avg1 = flow_motions(flow)
+        self.features = self.detector.init(self.features)
 
         self.indexes = [i for i in range(len(self.features))]
         self.indexes = np.array(self.indexes)
@@ -525,43 +603,25 @@ class LKTracker(object):
         self.initial_features = self.features.copy()
 
         points0, points1 = self.next_features()
-        self.detector.update(points1)
-
-    def create_block_links(self):
-        anchors = []
-        index = len(self.blocks)
-        point_index = len(self.features)
-        labels = self.labels.tolist()
-        for block in self.blocks:
-            points = [[block.top[0] - 20, block.top[1] + 20]]
-            self.features = np.append(self.features, np.array([points]), axis=0)
-            anchor = Anchor(block, index, [point_index], points, [0], [0],
-                            0, 0, 0, 0)
-            anchors.append(anchor)
-            labels.append(index)
-            index += 1
-            point_index += 1
-
-        self.blocks += anchors
-        self.labels = np.array(labels)
-        self.indexes = [i for i in range(len(self.features))]
-        self.indexes = np.array(self.indexes)
-        self.tracks = [[p[0]] for p in self.features]
-        self.status = np.ones((len(self.features), 1))
-        self.initial_features = self.features.copy()
-
+        self.detector.update(points1, self.homography)
 
     def read(self):
         self.current_frame += 1
-        ret, image = self.cap.read()
+        image, gray, self.homography = self.reader.read()
+        # ret, image = self.cap.read()
 
-        image = cv2.resize(image,(image.shape[1],700))
+        # image = cv2.resize(image,(image.shape[1],700))
+        # image = cv2.GaussianBlur(image,(5,5),0)
+        # image = cv2.medianBlur(image,5)
         return image
 
     def next_features(self):
         self.image = self.read()
         self.gray1 = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-        # affine = cv2.estimateRigidTransform(self.gray0, self.gray1, True)
+        affine = cv2.estimateRigidTransform(self.gray0, self.gray1, True)
+        # h, w = self.image.shape[:2]
+        # gray1 = cv2.warpAffine(self.gray1, affine, (w, h))
+        # self.image = cv2.warpAffine(self.image, affine, (w,h))
         # res = cv2.matchTemplate(self.gray1, self.anchor_data, cv2.TM_SQDIFF)
         # min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
         # top_left = min_loc
@@ -573,23 +633,33 @@ class LKTracker(object):
         self.features, self.status, track_error = cv2.calcOpticalFlowPyrLK(self.gray0, self.gray1, previous, None,
                                                                            **lk_params)
 
-        self.features = np.float32(self.features).reshape(-1, 2)
+        # features = np.float32(self.features).reshape(-1, 2)
+        H, status_homo = cv2.findHomography(previous, self.features, cv2.RANSAC, 1.0)
         # affine = cv2.getAffineTransform(previous, self.features)
-        # H, status_homo = cv2.findHomography(previous, self.features, cv2.RANSAC, 1.0)
         # # print status_homo
-        # h, w = self.image.shape[:2]
+        h, w = self.image.shape[:2]
+        # self.homography = H
         # print "COMPS:", getComponents(H)
         # print "!!!!!", pos
         # print self.features[0][0]
         #
-        # self.features2 = cv2.perspectiveTransform(self.features, H)
+        self.homography = H
+        # features2 = cv2.perspectiveTransform(previous, H)
         # # print self.features[0][0]
-        # for p1,p2 in zip(self.features, self.features2):
-        # cv2.circle(self.image, (p2[0][0], p2[0][1]), 1, COLORS[0])
-        # cv2.circle(self.image, (p1[0][0], p1[0][1]), 1, COLORS[1])
-        #     # print p1,p2
-        # self.image = cv2.warpPerspective(self.gray1, H, (w, h))
-        # self.image = cv2.addWeighted(self.image, 0.5, self.gray0, 0.5, 0)
+        # # print p1,p2
+        # warped = cv2.warpPerspective(self.gray0, self.homography, (w, h))
+        # # warped = cv2.warpAffine(self.gray0, affine, (w, h))
+        # features2, status2, track_error2 = cv2.calcOpticalFlowPyrLK(self.gray0, warped, previous, None,
+        # **lk_params)
+        # for p1,p2 in zip(self.features, features2):
+        # cv2.circle(self.image, (p2[0][0], p2[0][1]), 5, COLORS[0])
+        #     cv2.circle(self.image, (p1[0][0], p1[0][1]), 5, COLORS[1])
+        # diff = cv2.absdiff(warped, self.gray1)
+        # ret,thresh = cv2.threshold(diff,30,30,0)
+        # contours, hierarchy = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        # cv2.drawContours(diff, contours, -1, (255,255,255), 3)
+        # cv2.imshow("diff", diff)
+        # self.image = cv2.addWeighted(self.image, 0.5, warped, 0.5, 0)
         # diff = cv2.absdiff(self.gray0, self.gray1)
         # cv2.imshow("diff", diff)
         # self.image = self.gray1
@@ -607,6 +677,7 @@ class LKTracker(object):
         # print "error", 26, track_error[26]
         # print self.features
         # print "LENGTH", len(previous), len(self.features)
+        self.features = np.float32(self.features).reshape(-1, 2)
         self.gray0 = self.gray1
         # reversed, sr, er = cv2.calcOpticalFlowPyrLK(self.gray, self.gray0, self.features, None, **lk_params)
         #
@@ -632,7 +703,7 @@ class LKTracker(object):
         features = np.array(self.features).reshape((-1, 2))
 
         # points = self.features.reshape(-1, 1, 2)
-        self.detector.update(features)
+        self.detector.update(features, self.homography)
 
         for i, f in enumerate(features):
             self.tracks[i].append(f)
@@ -693,6 +764,7 @@ class LKTracker(object):
             self.pause = False
             self.current_frame = 0
             self.init_tracking()
+
 
 tracker = LKTracker(sys.argv[1])
 tracker.track()
